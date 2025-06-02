@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Scan + Voice + Lokasi + Gerak</title>
+  <title>Scan + Voice + Lokasi + Gerak + Print</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <style>
     video, canvas { width: 100%; max-height: 300px; }
@@ -10,23 +10,47 @@
     td, th { border: 1px solid #ccc; padding: 4px; font-size: 12px;}
     button { margin: 5px; padding: 6px; }
     .red { color: red; }
+    .flex-btns { display: flex; gap: 5px; flex-wrap: wrap; }
+    .sum-cell { font-weight: bold; background: #eef; }
   </style>
 </head>
 <body>
-  <h3>Scan Barcode/QR + Input Suara</h3>
+  <h3>Scan Barcode/QR + Input Suara + Print RAWBT</h3>
   <video id="video" autoplay></video>
   <canvas id="canvas" hidden></canvas>
 
-  <button onclick="startVoice()">🎤 Input Suara</button>
-  <button onclick="getLocation()">📍 Lokasi</button>
-  <button onclick="exportData()">💾 Export JSON</button>
+  <div class="flex-btns">
+    <button id="voiceBtn" onclick="startVoice()">🎤 Input Suara</button>
+    <button id="stopVoiceBtn" onclick="stopVoice()" disabled>⏹️ Stop Suara</button>
+    <button onclick="getLocation()">📍 Lokasi</button>
+    <button onclick="exportData()">💾 Export JSON</button>
+    <input type="file" id="importFile" style="display:none" accept=".json" onchange="importData(event)">
+    <button onclick="document.getElementById('importFile').click()">📂 Import JSON</button>
+  </div>
 
   <textarea id="note" placeholder="Catatan tambahan..."></textarea>
+  <input type="number" id="nominal" placeholder="Nominal (opsional)" style="width: 100%; height: 30px; margin-top: 4px;"/>
   <button onclick="saveToReport()">➕ Tambah ke Laporan</button>
 
   <table>
-    <thead><tr><th>Waktu</th><th>Isi</th><th>Lokasi</th><th>Gerak</th></tr></thead>
+    <thead>
+      <tr>
+        <th>Waktu</th>
+        <th>Isi</th>
+        <th>Nominal</th>
+        <th>Lokasi</th>
+        <th>Gerak</th>
+        <th>Print</th>
+      </tr>
+    </thead>
     <tbody id="log"></tbody>
+    <tfoot>
+      <tr>
+        <td colspan="2" class="sum-cell">Total</td>
+        <td class="sum-cell" id="totalNominal">0</td>
+        <td colspan="3"></td>
+      </tr>
+    </tfoot>
   </table>
 
   <script src="https://cdn.jsdelivr.net/npm/jsqr/dist/jsQR.js"></script>
@@ -37,12 +61,17 @@
     const ctx = canvas.getContext('2d');
     let lastMovement = "Diam";
     let currentPosition = "Belum terdeteksi";
+    let recognition = null; // for voice recognition
 
     // IndexedDB init
-    const openDB = indexedDB.open("ScanQRVoiceLogDB", 1);
-    openDB.onupgradeneeded = () => {
+    const openDB = indexedDB.open("ScanQRVoiceLogDB", 2);
+    openDB.onupgradeneeded = (e) => {
       db = openDB.result;
-      db.createObjectStore("laporan", { keyPath: "id", autoIncrement: true });
+      if (!db.objectStoreNames.contains("laporan")) {
+        db.createObjectStore("laporan", { keyPath: "id", autoIncrement: true });
+      } else if (e.oldVersion < 2) {
+        // migrasi: tambahkan field "nominal" jika belum ada
+      }
     };
     openDB.onsuccess = () => {
       db = openDB.result;
@@ -51,27 +80,59 @@
 
     function saveToReport() {
       const note = document.getElementById('note').value;
+      const nominal = parseInt(document.getElementById('nominal').value) || 0;
       const waktu = new Date().toLocaleString();
-      const data = { waktu, isi: note, lokasi: currentPosition, gerak: lastMovement };
+      const data = { waktu, isi: note, nominal, lokasi: currentPosition, gerak: lastMovement };
       const tx = db.transaction("laporan", "readwrite").objectStore("laporan").add(data);
-      tx.onsuccess = () => { appendRow(data); document.getElementById('note').value = ''; };
+      tx.onsuccess = () => {
+        appendRow(data);
+        document.getElementById('note').value = '';
+        document.getElementById('nominal').value = '';
+        updateTotal(nominal);
+      };
     }
 
     function appendRow(data) {
       const tr = document.createElement('tr');
-      tr.innerHTML = `<td>${data.waktu}</td><td>${data.isi}</td><td>${data.lokasi}</td><td>${data.gerak}</td>`;
+      tr.innerHTML = `<td>${data.waktu}</td>
+        <td>${data.isi}</td>
+        <td style="text-align:right;">${data.nominal ? data.nominal.toLocaleString() : ''}</td>
+        <td>${data.lokasi}</td>
+        <td>${data.gerak}</td>
+        <td><button onclick="printRawBT('${escapeSingleQuotes(data.isi)}', ${data.nominal}, '${escapeSingleQuotes(data.lokasi)}', '${escapeSingleQuotes(data.waktu)}')">🖨️ Print</button></td>`;
       document.getElementById('log').prepend(tr);
+      updateTotal();
     }
 
     function loadData() {
+      document.getElementById('log').innerHTML = '';
+      let total = 0;
       const tx = db.transaction("laporan", "readonly").objectStore("laporan").openCursor();
       tx.onsuccess = (e) => {
         const cursor = e.target.result;
         if (cursor) {
           appendRow(cursor.value);
+          if (cursor.value.nominal) total += cursor.value.nominal;
           cursor.continue();
         }
+        else {
+          document.getElementById('totalNominal').innerText = total.toLocaleString();
+        }
       };
+    }
+
+    function updateTotal(additional = 0) {
+      // Reload total nominal dari tabel
+      let total = 0;
+      const rows = document.querySelectorAll('#log tr');
+      rows.forEach(row => {
+        const cell = row.cells[2];
+        if (cell && cell.textContent) {
+          const val = parseInt(cell.textContent.replace(/,/g, '')) || 0;
+          total += val;
+        }
+      });
+      document.getElementById('totalNominal').innerText = total.toLocaleString();
     }
 
     function exportData() {
@@ -83,6 +144,34 @@
         dl.download = "laporan.json";
         dl.click();
       };
+    }
+
+    function importData(event) {
+      const file = event.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = function(e) {
+        try {
+          const arr = JSON.parse(e.target.result);
+          if (Array.isArray(arr)) {
+            const tx = db.transaction("laporan", "readwrite").objectStore("laporan");
+            arr.forEach(data => {
+              // Remove ID so autoIncrement works
+              delete data.id;
+              tx.add(data);
+            });
+            setTimeout(loadData, 500); // Give a slight delay to ensure data saved
+            alert("Data berhasil diimport!");
+          } else {
+            alert("File tidak valid!");
+          }
+        } catch (err) {
+          alert("Gagal import: " + err.message);
+        }
+      };
+      reader.readAsText(file);
+      // Reset input so can import same file twice if needed
+      event.target.value = "";
     }
 
     // Kamera dan scan QR
@@ -104,14 +193,33 @@
       }
     }
 
-    // Voice to text
+    // Voice to text, manual stop
     function startVoice() {
-      const rec = new (window.SpeechRecognition || window.webkitSpeechRecognition)();
-      rec.lang = 'id-ID';
-      rec.start();
-      rec.onresult = (e) => {
-        document.getElementById('note').value = e.results[0][0].transcript;
+      if (recognition) {
+        recognition.stop();
+      }
+      recognition = new (window.SpeechRecognition || window.webkitSpeechRecognition)();
+      recognition.lang = 'id-ID';
+      recognition.continuous = true;
+      recognition.interimResults = false;
+      recognition.onresult = (e) => {
+        let hasil = '';
+        for (let i = 0; i < e.results.length; i++) {
+          hasil += e.results[i][0].transcript + ' ';
+        }
+        document.getElementById('note').value = hasil.trim();
       };
+      recognition.start();
+      document.getElementById('voiceBtn').disabled = true;
+      document.getElementById('stopVoiceBtn').disabled = false;
+    }
+
+    function stopVoice() {
+      if (recognition) {
+        recognition.stop();
+      }
+      document.getElementById('voiceBtn').disabled = false;
+      document.getElementById('stopVoiceBtn').disabled = true;
     }
 
     // Lokasi
@@ -132,6 +240,28 @@
       const z = Math.abs(event.acceleration.z || 0);
       lastMovement = (x + y + z > 2) ? "Bergerak" : "Diam";
     });
+
+    // RawBT print per baris (Bluetooth RAWBT)
+    function printRawBT(isi, nominal, lokasi, waktu) {
+      // Format: tiap field per baris, lalu kirim ke RAWBT (Android)
+      let output = '';
+      output += waktu + '\n';
+      output += isi + '\n';
+      if (nominal && nominal > 0) output += 'Nominal: ' + nominal.toLocaleString() + '\n';
+      if (lokasi) output += 'Lokasi: ' + lokasi + '\n';
+      output += '---\n';
+      // Kirim ke RAWBT (Android) via intent
+      let url = "rawbt:base64," + btoa(unescape(encodeURIComponent(output)));
+      window.location.href = url;
+    }
+
+    // Escape single quotes for inline event handler
+    function escapeSingleQuotes(str) {
+      return (str || '').replace(/'/g, "\\'");
+    }
+
+    // Optional: stop voice when page unloads
+    window.onbeforeunload = function() { if (recognition) recognition.stop(); }
   </script>
 </body>
-    </html>
+</html>
