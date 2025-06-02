@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Scan + Voice + Lokasi + Gerak</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    video, canvas { width: 100%; max-height: 300px; }
+    textarea { width: 100%; height: 60px; }
+    table { width: 100%; border-collapse: collapse; margin-top: 10px;}
+    td, th { border: 1px solid #ccc; padding: 4px; font-size: 12px;}
+    button { margin: 5px; padding: 6px; }
+    .red { color: red; }
+  </style>
+</head>
+<body>
+  <h3>Scan Barcode/QR + Input Suara</h3>
+  <video id="video" autoplay></video>
+  <canvas id="canvas" hidden></canvas>
+
+  <button onclick="startVoice()">🎤 Input Suara</button>
+  <button onclick="getLocation()">📍 Lokasi</button>
+  <button onclick="exportData()">💾 Export JSON</button>
+
+  <textarea id="note" placeholder="Catatan tambahan..."></textarea>
+  <button onclick="saveToReport()">➕ Tambah ke Laporan</button>
+
+  <table>
+    <thead><tr><th>Waktu</th><th>Isi</th><th>Lokasi</th><th>Gerak</th></tr></thead>
+    <tbody id="log"></tbody>
+  </table>
+
+  <script src="https://cdn.jsdelivr.net/npm/jsqr/dist/jsQR.js"></script>
+  <script>
+    let db;
+    const video = document.getElementById('video');
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    let lastMovement = "Diam";
+    let currentPosition = "Belum terdeteksi";
+
+    // IndexedDB init
+    const openDB = indexedDB.open("ScanQRVoiceLogDB", 1);
+    openDB.onupgradeneeded = () => {
+      db = openDB.result;
+      db.createObjectStore("laporan", { keyPath: "id", autoIncrement: true });
+    };
+    openDB.onsuccess = () => {
+      db = openDB.result;
+      loadData();
+    };
+
+    function saveToReport() {
+      const note = document.getElementById('note').value;
+      const waktu = new Date().toLocaleString();
+      const data = { waktu, isi: note, lokasi: currentPosition, gerak: lastMovement };
+      const tx = db.transaction("laporan", "readwrite").objectStore("laporan").add(data);
+      tx.onsuccess = () => { appendRow(data); document.getElementById('note').value = ''; };
+    }
+
+    function appendRow(data) {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `<td>${data.waktu}</td><td>${data.isi}</td><td>${data.lokasi}</td><td>${data.gerak}</td>`;
+      document.getElementById('log').prepend(tr);
+    }
+
+    function loadData() {
+      const tx = db.transaction("laporan", "readonly").objectStore("laporan").openCursor();
+      tx.onsuccess = (e) => {
+        const cursor = e.target.result;
+        if (cursor) {
+          appendRow(cursor.value);
+          cursor.continue();
+        }
+      };
+    }
+
+    function exportData() {
+      const tx = db.transaction("laporan", "readonly").objectStore("laporan").getAll();
+      tx.onsuccess = () => {
+        const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(tx.result));
+        const dl = document.createElement('a');
+        dl.href = dataStr;
+        dl.download = "laporan.json";
+        dl.click();
+      };
+    }
+
+    // Kamera dan scan QR
+    navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } })
+      .then(stream => {
+        video.srcObject = stream;
+        scanLoop();
+      });
+
+    function scanLoop() {
+      requestAnimationFrame(scanLoop);
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      ctx.drawImage(video, 0, 0);
+      const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const code = jsQR(imgData.data, imgData.width, imgData.height);
+      if (code) {
+        document.getElementById('note').value = code.data;
+      }
+    }
+
+    // Voice to text
+    function startVoice() {
+      const rec = new (window.SpeechRecognition || window.webkitSpeechRecognition)();
+      rec.lang = 'id-ID';
+      rec.start();
+      rec.onresult = (e) => {
+        document.getElementById('note').value = e.results[0][0].transcript;
+      };
+    }
+
+    // Lokasi
+    function getLocation() {
+      navigator.geolocation.getCurrentPosition(pos => {
+        const { latitude, longitude } = pos.coords;
+        currentPosition = `${latitude.toFixed(5)}, ${longitude.toFixed(5)}`;
+        alert("Lokasi: " + currentPosition);
+      }, () => {
+        currentPosition = "Gagal deteksi lokasi";
+      });
+    }
+
+    // Deteksi Gerakan
+    window.addEventListener("devicemotion", (event) => {
+      const x = Math.abs(event.acceleration.x || 0);
+      const y = Math.abs(event.acceleration.y || 0);
+      const z = Math.abs(event.acceleration.z || 0);
+      lastMovement = (x + y + z > 2) ? "Bergerak" : "Diam";
+    });
+  </script>
+</body>
+    </html>
