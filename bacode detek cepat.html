@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Scanner Barcode Otomatis</title>
+  <style>
+    body { font-family: sans-serif; text-align: center; background: #f0f0f0; }
+    #video { width: 100%; max-width: 500px; border: 4px solid #000; margin: 10px auto; }
+    #result { font-size: 1.5em; background: #fff; padding: 10px; border: 1px solid #ccc; margin-top: 10px; }
+    #toggleTorch { padding: 10px 20px; margin-top: 10px; }
+  </style>
+</head>
+<body>
+  <h2>Scanner Barcode Otomatis</h2>
+  <video id="video" autoplay></video>
+  <div>
+    <button id="toggleTorch">Nyalakan Lampu</button>
+  </div>
+  <div id="result">Menunggu barcode...</div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/quagga/0.12.1/quagga.min.js"></script>
+  <script>
+    let torchOn = false;
+    let track;
+
+    function startScanner() {
+      Quagga.init({
+        inputStream: {
+          type: "LiveStream",
+          target: document.querySelector('#video'),
+          constraints: {
+            facingMode: "environment",
+            width: { ideal: 1280 },
+            height: { ideal: 720 },
+            focusMode: "continuous",
+            advanced: [{ torch: false }]
+          }
+        },
+        decoder: {
+          readers: ["code_128_reader", "ean_reader", "upc_reader"]
+        },
+        locate: true,
+      }, function(err) {
+        if (err) {
+          console.error(err);
+          return;
+        }
+        Quagga.start();
+      });
+
+      Quagga.onDetected(data => {
+        const code = data.codeResult.code;
+        document.getElementById('result').innerText = 'Barcode: ' + code;
+        console.log("Barcode detected:", code);
+      });
+    }
+
+    document.getElementById('toggleTorch').addEventListener('click', () => {
+      if (!track) {
+        const stream = Quagga.cameraAccess.getActiveTrack();
+        if (stream) track = stream;
+      }
+
+      if (track && track.getCapabilities().torch) {
+        torchOn = !torchOn;
+        track.applyConstraints({
+          advanced: [{ torch: torchOn }]
+        });
+        document.getElementById('toggleTorch').innerText = torchOn ? "Matikan Lampu" : "Nyalakan Lampu";
+      } else {
+        alert("Lampu tidak didukung di perangkat ini.");
+      }
+    });
+
+    startScanner();
+  </script>
+</body>
+</html>
