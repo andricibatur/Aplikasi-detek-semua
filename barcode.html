@@ -2,61 +2,103 @@
 <html>
 <head>
   <meta charset="UTF-8">
-  <title>Scanner Barcode Otomatis</title>
-  <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
+  <title>Scanner Barcode IndexedDB</title>
+  <script src="https://unpkg.com/html5-qrcode"></script>
   <style>
-    body { font-family: sans-serif; background: #f0f0f0; text-align: center; }
+    body { font-family: sans-serif; background: #f9f9f9; text-align: center; }
     #reader { width: 100%; max-width: 500px; margin: auto; }
-    #log { margin-top: 15px; padding: 10px; background: #fff; border: 1px solid #ccc; text-align: left; max-width: 500px; margin-left: auto; margin-right: auto; }
-    .log-entry { padding: 5px; border-bottom: 1px solid #ddd; }
+    #log { margin-top: 15px; padding: 10px; background: #fff; border: 1px solid #ccc; max-width: 500px; margin-left: auto; margin-right: auto; text-align: left; }
+    .log-entry { padding: 5px; border-bottom: 1px solid #eee; }
+    button { margin: 5px; padding: 8px 16px; }
   </style>
 </head>
 <body>
-  <h2>Scanner Barcode Otomatis</h2>
+  <h2>📷 Scanner Barcode Otomatis</h2>
   <div id="reader"></div>
+  <div>
+    <button onclick="clearLaporan()">🗑️ Clear Laporan</button>
+    <button onclick="copyLaporan()">📋 Copy Laporan</button>
+  </div>
   <div id="log"><strong>Hasil Scan:</strong></div>
-
-  <!-- Suara bip -->
   <audio id="beep" src="https://actions.google.com/sounds/v1/alarms/beep_short.ogg" preload="auto"></audio>
 
   <script>
-    const logContainer = document.getElementById('log');
+    const dbName = "scanner_db";
+    const storeName = "logs";
+    let db;
+
     const beep = document.getElementById('beep');
-    const scannedSet = new Set(); // opsional: hilangkan jika ingin duplikat boleh
+    const logContainer = document.getElementById('log');
 
-    function onScanSuccess(decodedText, decodedResult) {
-      // Jika ingin hindari duplikat, gunakan Set
-      if (scannedSet.has(decodedText)) return;
-      scannedSet.add(decodedText);
+    // Init IndexedDB
+    const openDB = indexedDB.open(dbName, 1);
+    openDB.onupgradeneeded = function(e) {
+      db = e.target.result;
+      db.createObjectStore(storeName, { keyPath: "id", autoIncrement: true });
+    };
+    openDB.onsuccess = function(e) {
+      db = e.target.result;
+      tampilkanLaporan();
+    };
 
-      // Suara bip
-      beep.play().catch(e => console.log("Audio error:", e));
-
-      // Getar
-      if (navigator.vibrate) navigator.vibrate(300);
-
-      // Tampilkan hasil ke log
-      const entry = document.createElement("div");
-      entry.className = "log-entry";
-      entry.textContent = `📦 ${decodedText} (${new Date().toLocaleTimeString()})`;
-      logContainer.appendChild(entry);
+    function simpanLog(text) {
+      const tx = db.transaction(storeName, "readwrite");
+      const store = tx.objectStore(storeName);
+      store.add({ waktu: new Date().toISOString(), teks: text });
     }
 
-    // Start scanning
-    new Html5Qrcode("reader")
-      .start(
-        { facingMode: "environment" },
-        {
-          fps: 10,
-          qrbox: 250,
-          rememberLastUsedCamera: true
-        },
-        onScanSuccess
-      )
-      .catch(err => {
-        logContainer.innerHTML = "Gagal membuka kamera: " + err;
-        console.error(err);
-      });
+    function tampilkanLaporan() {
+      const tx = db.transaction(storeName, "readonly");
+      const store = tx.objectStore(storeName);
+      const req = store.openCursor();
+      logContainer.innerHTML = "<strong>Hasil Scan:</strong>";
+      req.onsuccess = function(e) {
+        const cursor = e.target.result;
+        if (cursor) {
+          const log = cursor.value;
+          const div = document.createElement("div");
+          div.className = "log-entry";
+          div.textContent = `📦 ${log.teks} (${new Date(log.waktu).toLocaleTimeString()})`;
+          logContainer.appendChild(div);
+          cursor.continue();
+        }
+      };
+    }
+
+    function clearLaporan() {
+      const tx = db.transaction(storeName, "readwrite");
+      const store = tx.objectStore(storeName);
+      store.clear().onsuccess = tampilkanLaporan;
+    }
+
+    function copyLaporan() {
+      const tx = db.transaction(storeName, "readonly");
+      const store = tx.objectStore(storeName);
+      const req = store.getAll();
+      req.onsuccess = function() {
+        const text = req.result.map(r => `${r.teks} (${new Date(r.waktu).toLocaleTimeString()})`).join("\n");
+        navigator.clipboard.writeText(text).then(() => alert("Laporan disalin!"));
+      };
+    }
+
+    function onScanSuccess(decodedText, decodedResult) {
+      beep.play().catch(() => {});
+      if (navigator.vibrate) navigator.vibrate(300);
+      simpanLog(decodedText);
+      tampilkanLaporan();
+    }
+
+    new Html5Qrcode("reader").start(
+      { facingMode: "environment" },
+      {
+        fps: 10,
+        qrbox: 250,
+        rememberLastUsedCamera: true
+      },
+      onScanSuccess
+    ).catch(err => {
+      logContainer.innerHTML = "Gagal membuka kamera: " + err;
+    });
   </script>
 </body>
 </html>
